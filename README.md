@@ -22,7 +22,7 @@ deploy-tool tool is used to authorise logins on multiple remote machines at the 
 1. Run command `deplop-tool -e` to set static ip and dynamic ip of the remote machines. Also the password of the remote machines.
 
  ```bash
- # deploy-stastll -e
+ # deploy-tool -e
  ```
 
  staticip: If you have two machines that owned by you, you can put their ip address here
@@ -36,13 +36,13 @@ deploy-tool tool is used to authorise logins on multiple remote machines at the 
 2. Configure ssh login without password and copy .bashrc, .vimrc and .emacs file to remote machines.
 
  ```bash
- # deploy-stastll -d
+ # deploy-tool -d
  ```
 
 3. Undeploy remote machines, this will revert .bashrc, .vimrc and .emacs file on the remote machines
 
  ```bash
- # deploy-stastll -u
+ # deploy-tool -u
  ```
 
 4. Login the remote machines with `tsh` command
@@ -62,19 +62,19 @@ deploy-tool tool is used to authorise logins on multiple remote machines at the 
 5. Configure more machines with ip address specified on the command line
 
  ```bash
- # deploy-stastll -D $ip1 $ip2
+ # deploy-tool -D $ip1 $ip2
  ```
 
 6. Undeploy remote machines with ip address specified on the command line
 
  ```bash
- # deploy-stastll -U $ip1 $ip2
+ # deploy-tool -U $ip1 $ip2
  ```
 
 7. Print help messages
 
  ```bash
- # deploy-stastll -h
+ # deploy-tool -h
  ```
 
 8. If you want to upload your own scripts, executable files or other files, you can copy them to ~/.deploy-tool./bin or ~/.deploy-tool/testfiles
