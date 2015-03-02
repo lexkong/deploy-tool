@@ -17,7 +17,7 @@ deploy-tool tool is used to authorise logins on multiple remote machines at the 
 
 # How to use deploy-tool
 
-deploy-tool only have three main features, so it is very easy to use.
+ deploy-tool only have three main features, so it is very easy to use.
 
 1. Run command `deplop-tool -e` to set static ip and dynamic ip of the remote machines. Also the password of the remote machines.
 
