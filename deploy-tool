@@ -1,0 +1,440 @@
+#!/bin/bash
+
+# Description:
+# deploy-tool tool is used to authorise logins on multiple remote machines at the same time and generate a login command for you to login these machines. It can also deploy your personal bash environment or vim, emacs profiles to your test machines at the same time.
+#
+# Author: Lingfei Kong <lkong@redhat.com>
+# Your comments and suggestions are welcomed!
+
+#### Configuration options
+ConfigDir="$HOME/.deploy-tool"
+BIN_DIR="$HOME/bin"
+[ ! -d $BIN_DIR ] && mkdir -p $BIN_DIR
+
+HostCom=$BIN_DIR/tsh
+
+# Define colors
+cyan='\033[36m';normal='\033[0m';red='\033[31m';magenta='\033[35m';yellow='\033[33m';white='\033[37m';green='\033[32m'
+
+##################################################
+echo "$*" | grep -w "\-v" &>/dev/null && DEBUG="on" || DEBUG=""
+
+EDITOR=${EDITOR:="vim"}
+JUG=0
+
+
+opts="h"
+declare dict=(a b c d e f g h i g)
+declare dict2=(1 2 3 4 5 6 7 8 9)
+
+function Usage()
+{
+    cat << EOF
+Usage deploy-tool [OPTION..]
+    -e  edit deploy-tool.conf, deploy-tool.conf is a configure file which used to set some variables
+    -D  Configure more machines with ip address specified on the command line
+    -d  Configure ssh login without password and copy .bashrc, .vimrc and .emacs file to remote machines
+    -U  Undeploy remote machines with ip address specified on the command line
+    -u  Undeploy remote machines, this will revert .bashrc, .vimrc and .emacs file on the remote machines
+    -h  print this help message
+EOF
+}
+
+# Prepare files, such as deploy-tool.conf, bashrc, vimrc and emacs
+function PrepareFiles()
+{
+    mkdir -p $ConfigDir/{conf,bin,testfiles}
+
+    # Generate cg command
+cat << 'EOF' > $ConfigDir/bin/cg
+#!/bin/bash
+DATA_DIR=/var/lib/deploy-tool/$TESTER
+yellow='\033[33m';normal='\033[0m';cyan='\033[36m';red='\033[31m'
+
+function Usage()
+{
+    cat << EOF2
+cg [chad] branch
+branch: which branch you want to swith, like git
+    -h print this help message
+    -c show current branch
+    -a show all the branch
+    -d delete a branch
+EOF2
+}
+
+current_branch=$(ls -1ld $HOME/$TESTER |awk -F'/' '{print $NF}')
+if [ "$#" -eq 0 ];then
+    Usage
+elif [ "$1" == "-h" ];then
+    Usage
+elif [ "$1" == "-d" -a "$2" != "" ];then
+    until [ -z "$2" ]
+    do
+        [ "$current_branch" == "$2" ] && {
+            echo -e "${red}Can not delete branch ${normal}${cyan}${current_branch}${normal}${red}, you are now on branch${normal} ${cyan}${current_branch}${normal}"
+            shift
+            continue
+        }
+        rm -rf "$DATA_DIR/$2"
+        shift
+    done
+elif [ "$1" == "-d" -a "$2" == "" ];then
+    Usage
+elif [ "$1" == "-c" ];then
+    echo $current_branch
+elif [ "$1" == "-a" ];then
+    ls -1 $DATA_DIR |egrep -v 'bin'
+else
+    branch="$1"
+    [ ! -d $DATA_DIR/$branch ] && mkdir -p $DATA_DIR/$branch
+    unlink $HOME/$TESTER &>/dev/null
+    ln -s $DATA_DIR/$branch $HOME/$TESTER
+    cd $HOME/$TESTER
+    echo -e ${yellow}"You are now on branch${normal} ${cyan}$branch"${normal}
+fi
+EOF
+
+# Generate configure file
+    cat << EOF > $ConfigDir/deploy-tool.conf
+# Tester name, name should not include special characters
+tester=$(whoami)
+
+# Target host's ip address, note: the ip address should be separated by blank space.
+# In fact, this file will be sourced in script file: deploy-tool.
+staticip=()
+ip=()
+
+# The target host's password
+password=
+
+# If you have configured $ConfigDir/conf/bashrc, you can set configured to yes
+# Please make sure your new bashrc file is ready to use on the target machines, i.e. no destructive settings
+configured=no
+EOF
+
+# Generate bashrc file
+    cat $HOME/.bashrc - <<EOF > $ConfigDir/conf/bashrc
+
+# Note: Please do not delete the following 4 lines
+PS1='\[\e[34;35m\]\[\e[0m\][host\[\e[36;99m\]-a\[\e[0m(INSTESTER)\]\[\e[34;99m\]\[\e[0m\]]\[\e[31;99m\]\$\[\e[0m\]'
+export TESTER=INSTESTER
+alias cg="source /var/lib/deploy-tool/\$TESTER/bin/cg"
+export PATH=\$PATH:/var/lib/deploy-tool/\$TESTER/bin:/usr/sbin
+EOF
+
+    [ ! -f $ConfigDir/conf/vimrc ] && cp -f $HOME/.vimrc $ConfigDir/conf/vimrc
+    [ ! -f $ConfigDir/conf/emacs ] && cp -f $HOME/.emacs $ConfigDir/conf/emacs
+}
+
+# Check the ssh key for the target hosts
+function CheckSSH()
+{
+    echo -ne ${yellow}"Checking ssh key for host: $1" ......${normal}
+    UI=root@"$1"
+    /usr/bin/expect << EOF > /dev/null
+    set timeout 30
+    spawn ssh $UI
+
+    expect {
+    "*yes*"
+    {
+        exit 1
+    }
+
+    "*assword*"
+    {
+        exit 1
+    }
+
+    "*#*" {exit 0}
+    eof {exit 2}
+}
+EOF
+    JUG="$?"
+    [ $JUG -eq 2 ] && eval sed -i '/$1/d' $HOME/.ssh/known_hosts &> /dev/null
+    echo -e ${yellow} done${normal}
+    return "$JUG"
+}
+
+# Make sure you have configured ssh key and generated login command before you deploy your env.
+function CheckBefore()
+{
+
+#    [ ! -f "$2" ] && echo -e "${red}Please configure $ConfigDir/deploy-tool.conf file first(tsh command not found)$normal" && return 1
+
+    CheckSSH $1
+    if [ "$?" -ne 0 ];then
+        echo -e "${red}Please configure your ssh key for $1 first$normal"
+        return 1
+    else
+        return 0
+    fi
+}
+
+function configssh()
+{
+    UI=root@"$1"
+
+    CheckSSH $1
+    [ "$JUG" != "0" ] && {
+        eval sed -i '/$1/d' $HOME/.ssh/known_hosts &> /dev/null
+        echo -ne ${yellow}"Generate ssh key for host: $1" ......${normal}
+        /usr/bin/expect << EOF > /dev/null
+#    cat << EOF > /tmp/aa.sh
+set timeout 10
+set password $2
+
+spawn ssh-copy-id $UI
+expect {
+    "*yes*"
+        {
+            send "yes\r"
+            expect eof {exit}
+            expect "*assword*"
+            send "\$password\r"
+            exp_continue
+        }
+
+    "*assword*"
+       {
+            send "\$password\r"
+            exp_continue
+       }
+}
+EOF
+        echo -e ${yellow} done${normal}
+    }
+}
+
+# Configure ssh login without password for each hosts
+function Nodedeploy()
+{
+    # username@ipaddress
+    UI="root@$1"
+    Host=$1
+
+    # If the target machine already have deployed, then, return.
+    [ "$(ssh $UI "[ -f ~/.deploy-tool.lock.$tester ] && echo 1")" == "1" ] && {
+    echo -e $red"$UI have already deployed, ignore."$normal
+
+    # But still chang PS1 for that machine
+    ssh $UI "sed -i "/PS1/s/-[0-9a-z]/$2/" ~/.bashrc"
+    return 0
+    }
+    echo -e ${cyan}Start to deploy host: $Host ......${normal}
+
+    # Prepare environment
+    [ "$DEBUG" ] && printf "Prepare environment on host: %s ......" $Host
+    ssh "$UI" "[ ! -d $DATA_DIR/bin ] && mkdir -p $DATA_DIR/bin; [ ! -d $DATA_DIR/master ] && mkdir -p $DATA_DIR/master;ln -s $DATA_DIR/master ~/$tester; touch ~/.deploy-tool.lock.$tester"
+    [ "$DEBUG" ] && printf " done\n"
+
+
+    # Upload bashrc, vimrc and emacs file to the remote machines
+    for file in $(ls $ConfigDir/conf/)
+    do
+        [ "$DEBUG" ] && printf "Upload conf/%s to %s:~/.$file......" $file $Host
+        rsync --suffix=.$tester -qLbae ssh $ConfigDir/conf/$file "$UI":~/.$file > /dev/null
+        [ "$DEBUG" ] && printf " done\n"
+    done
+
+    [ "$DEBUG" ] && printf "Upload bin/* to %s:%s/bin/ ......" $Host $DATA_DIR
+    rsync -qae ssh $ConfigDir/bin/* "$UI":$DATA_DIR/bin/
+    [ "$DEBUG" ] && printf " done\n"
+
+    # Deal files
+    [ "$DEBUG" ] && printf "Deal with file ~/.bashrc ......"
+    ssh -n "$UI" "sed -i 's/INSTESTER/$tester/g' ~/.bashrc; sed -i '/PS1/s/-[0-9a-z]/$2/' ~/.bashrc"
+    [ "$DEBUG" ] && printf " done\n"
+
+    echo -e ${cyan}Finished to deploy host $Host${normal}
+}
+
+function NodeUndeploy()
+{
+    # username@ipaddress
+    UI="root@$1"
+
+    echo -e ${cyan}Start to undeploy host $1 ......${normal}
+
+    rmstr=""
+    for file in $(ls -A $ConfigDir/conf/)
+    do
+        str="${str}""rm -f ~/$file;"
+    done
+
+    [ "$DEBUG" ] && echo -n "unlink ~/$tester && revert $1:~/*.$tester && rm -rf $DATA_DIR ......"
+    ssh "$UI" "rename .$tester '' .*.$tester &>/dev/null; rm -f ~/.deploy-tool.lock; rm -rf $DATA_DIR; unlink ~/$tester &>/dev/null"
+
+    [ "$DEBUG" ] && echo " done"
+
+    echo -e ${cyan}Finished to undeploy host $1${normal}
+}
+
+# Generate host command
+function GenHostCom()
+{
+
+    echo -ne Generate $HostCom ......
+
+    cat /dev/null > $HostCom
+    cat << EOF >> $HostCom
+#!/bin/bash
+
+while getopts OPTS opt
+do
+    case \$opt in
+EOF
+
+    i=0
+    HelpStr=""
+    for host in "${staticip[@]}"
+    do
+        opt=${dict2[i]}
+        opts=$opts$opt
+        cat << EOF >> $HostCom
+        $opt)  ssh -Y root@$host ;;
+EOF
+        HelpStr="$HelpStr""             echo $opt: root@$host \"->host-$opt\"\n"
+        ((i++))
+    done
+
+    i=0
+    for host in "${ip[@]}"
+    do
+        opt=${dict[i]}
+        opts=$opts$opt
+
+        cat << EOF >> $HostCom
+        $opt)  ssh -Y root@$host ;;
+EOF
+        HelpStr="$HelpStr""             echo $opt: root@$host \"-> host-$opt\"\n"
+        ((i++))
+    done
+    cat << EOF >> $HostCom
+        h)
+            $(echo -e "         $HelpStr")
+            ;;
+        *) echo "command error, pls check the parameter"
+            exit 1
+            ;;
+    esac
+done
+EOF
+
+    eval sed -i 's/OPTS/$opts/g' $HostCom
+
+    chmod 755 $HostCom
+    echo -e " done"
+}
+
+
+[ $# -eq 0 ] && Usage && exit
+
+[ -d $ConfigDir ] || PrepareFiles
+source $ConfigDir/deploy-tool.conf
+DATA_DIR="/var/lib/deploy-tool/$tester"
+
+# Check host environment
+[ ! -f $HOME/.ssh/id_rsa.pub ] && {
+    echo -e $red"Please generate your public key first, use ssh-keygen to generate."$normal
+    exit
+}
+
+
+[ "$configured" != "yes" -a "$1" != "-e" ] && {
+    echo -e $red"Please check $ConfigDir/conf/bashrc, if it is ready to use,\nthen set 'configured' to 'yes' in deploy-tool.conf file first."$normal
+    exit
+}
+
+# Script Start
+while getopts eduD:U:hv opt
+do
+    case $opt in
+        e) $EDITOR $ConfigDir/deploy-tool.conf
+            ;;
+        d)
+            GenHostCom
+
+            i=0;fip=""
+            for host in "${staticip[@]}"
+            do
+                [ "$fip" == "" ] && fip=$host
+                opt=${dict2[i]}
+                configssh $host $password
+                Nodedeploy "$host" "-$opt"
+                ((i++))
+            done
+
+            i=0;fip=""
+            for host in "${ip[@]}"
+            do
+
+                [ "$fip" == "" ] && fip=$host
+                opt=${dict[i]}
+                configssh $host $password
+                Nodedeploy "$host" "-$opt"
+                ((i++))
+            done
+
+            echo
+            echo -e ${magenta}You can use \"tsh\" "command" to login the host. "\n"eg: tsh -a to login $fip${normal}
+            echo
+            tsh -h
+            ;;
+        u)
+            for host in "${ip[@]}"
+            do
+                CheckBefore $host $HostCom
+                [ "$?" -ne 0 ] && continue
+                NodeUndeploy "$host"
+                eval sed -i '/$host/d' $HostCom
+                eval sed -i '/^ip/s/$host//' $ConfigDir/deploy-tool.conf
+            done
+            ;;
+        D)
+            hosts=($@)
+            len=$[ ${#ip[*]} + 1 ]
+
+            for host in ${hosts[*]}
+            do
+                [ $host == '-D' ] && continue
+
+                ip[len]="$host"
+                opt=${dict[len]}
+                GenHostCom
+                configssh $host $password
+                Nodedeploy "$host" "-$opt"
+                eval sed -i '/^ip/s/\)\$/\ $host\)/' $ConfigDir/deploy-tool.conf
+                let len++
+            done
+
+           echo
+           echo -e ${magenta}You can use \"tsh\" "command" to login the host. "\n"eg: tsh -a to login $fip${normal}
+           echo
+           tsh -h
+           ;;
+        U)
+            hosts=($@)
+
+            for host in ${hosts[*]}
+            do
+                [ $host == '-U' ] && continue
+                CheckBefore "$host" $HostCom
+                [ "$?" -ne 0 ] && continue
+
+                NodeUndeploy "$host"
+                eval sed -i '/$host/d' $HostCom
+                eval sed -i '/^ip/s/$host//' $ConfigDir/deploy-tool.conf
+                eval sed -i '/^staticip/s/$host//' $ConfigDir/deploy-tool.conf
+            done
+            ;;
+        h) Usage
+            ;;
+        v) :
+            ;;
+        *)
+            Usage
+            ;;
+    esac
+done
