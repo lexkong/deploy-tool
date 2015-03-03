@@ -117,7 +117,7 @@ EOF
     cat $HOME/.bashrc - <<EOF > $ConfigDir/conf/bashrc
 
 # Note: Please do not delete the following 4 lines
-PS1='\[\e[34;35m\]\[\e[0m\][host\[\e[36;99m\]-a\[\e[0m(INSTESTER)\]\[\e[34;99m\]\[\e[0m\]]\[\e[31;99m\]\$\[\e[0m\]'
+PS1='\[\e[34;35m\]\[\e[0m\][host\[\e[36;99m\]-a-(INSTESTER)\[\e[0m\]\[\e[34;99m\]\[\e[0m\]]\[\e[31;99m\]\\$\[\e[0m\]'
 export TESTER=INSTESTER
 alias cg="source /var/lib/deploy-tool/\$TESTER/bin/cg"
 export PATH=\$PATH:/var/lib/deploy-tool/\$TESTER/bin:/usr/sbin
@@ -216,12 +216,13 @@ function Nodedeploy()
 
     # If the target machine already have deployed, then, return.
     [ "$(ssh $UI "[ -f ~/.deploy-tool.lock.$tester ] && echo 1")" == "1" ] && {
-    echo -e $red"$UI have already deployed, ignore."$normal
+        echo -e $red"$UI have already deployed, ignore."$normal
 
-    # But still chang PS1 for that machine
-    ssh $UI "sed -i "/PS1/s/-[0-9a-z]/$2/" ~/.bashrc"
-    return 0
+        # But still chang PS1 for that machine
+        ssh $UI "sed -i "/PS1/s/-[0-9a-z]/$2/" ~/.bashrc"
+        return 0
     }
+
     echo -e ${cyan}Start to deploy host: $Host ......${normal}
 
     # Prepare environment
@@ -245,6 +246,11 @@ function Nodedeploy()
     # Deal files
     [ "$DEBUG" ] && printf "Deal with file ~/.bashrc ......"
     ssh -n "$UI" "sed -i 's/INSTESTER/$tester/g' ~/.bashrc; sed -i '/PS1/s/-[0-9a-z]/$2/' ~/.bashrc"
+    echo "sed -i 's/INSTESTER/$tester/g' ~/.bashrc; sed -i '/PS1/s/-[0-9a-z]/$2/' ~/.bashrc"
+    [ "$DEBUG" ] && printf " done\n"
+
+    [ "$DEBUG" ] && printf "Upload testfiles to %s:%s/master ......" $Host $DATA_DIR
+    rsync -qae ssh $ConfigDir/testfiles "$UI":$DATA_DIR/master
     [ "$DEBUG" ] && printf " done\n"
 
     echo -e ${cyan}Finished to deploy host $Host${normal}
